@@ -7,6 +7,7 @@ from glob import glob
 import matplotlib.pyplot as plt
 import networkx as nx
 import pandas as pd
+import seaborn as sns
 
 # ---------------------------
 # Configuration and Constants
@@ -15,12 +16,11 @@ import pandas as pd
 # Paths to the directories containing JSON files
 COMMITS_DATA_PATH = "data/commits/*.json"
 ISSUES_DATA_PATH = "data/issues/*.json"
+CSV_FILE_PATH = "dataset/dataset_filtrado.csv"
 
 # Threshold percentile to define core developers (e.g., top 20%)
 CORE_DEVELOPER_PERCENTILE = 0.8
 
-# Approval labels to consider in RQ2.6
-APPROVAL_LABELS = ["lgtm", "approved"]
 
 # ---------------------------
 # Utility Functions
@@ -123,20 +123,6 @@ def categorize_issue(issue):
         return "Other"
 
 
-def extract_approval_labels(labels):
-    """
-    Extract approval labels from a list of labels.
-
-    Args:
-        labels (list): List of label dictionaries.
-
-    Returns:
-        list: List of approval labels present.
-    """
-    label_names = [label["name"].lower() for label in labels]
-    return [label for label in label_names if label in APPROVAL_LABELS]
-
-
 # ---------------------------
 # Data Loading and Preprocessing
 # ---------------------------
@@ -166,7 +152,7 @@ def load_all_commits(data_path):
                 "message": commit["commit"]["message"],
                 "parent_count": len(commit["parents"]),
                 "verified": commit["commit"]["verification"]["verified"],
-                # Include commit stats if available
+                #
                 "additions": commit["stats"]["additions"] if commit.get("stats") else 0,
                 "deletions": commit["stats"]["deletions"] if commit.get("stats") else 0,
                 "total_changes": commit["stats"]["total"] if commit.get("stats") else 0,
@@ -276,12 +262,6 @@ def enrich_issue_data(issues_df):
     # Categorize issues
     issues_df["issue_category"] = issues_df.apply(categorize_issue, axis=1)
 
-    # Extract approval labels
-    issues_df["approval_labels"] = issues_df["labels"].apply(extract_approval_labels)
-
-    # Flag issues with approval labels
-    issues_df["has_approval_label"] = issues_df["approval_labels"].apply(lambda x: len(x) > 0)
-
     return issues_df
 
 
@@ -293,16 +273,83 @@ def enrich_issue_data(issues_df):
 def analyze_commit_trends(commits_df):
     """
     Analyze commit trends over time to determine if community engagement is increasing.
+    Includes overall trends and per-repository trends.
 
     Args:
         commits_df (pd.DataFrame): Enriched commit DataFrame.
 
     Returns:
-        pd.DataFrame: DataFrame with commit counts over time.
+        tuple:
+            - overall_commit_counts (pd.Series): Overall commit counts per month.
+            - repo_commit_counts (pd.DataFrame): Commit counts per repository per month.
     """
-    commit_counts = commits_df.groupby(commits_df["date"].dt.to_period("M")).size().rename("commit_count")
-    commit_counts.index = commit_counts.index.to_timestamp()
-    return commit_counts
+    # Overall commit counts per month
+    overall_commit_counts = commits_df.groupby(commits_df["date"].dt.to_period("Q")).size().rename("commit_count")
+    overall_commit_counts.index = overall_commit_counts.index.to_timestamp()
+
+    # Per-repository commit counts per month
+    repo_commit_counts = (
+        commits_df.groupby(["repo_name", commits_df["date"].dt.to_period("Q")]).size().unstack(level=0).fillna(0)
+    )
+    repo_commit_counts.index = repo_commit_counts.index.to_timestamp()
+
+    return overall_commit_counts, repo_commit_counts
+
+
+# ---------------------------
+# Visualization Functions (Updated)
+# ---------------------------
+
+
+def plot_commit_trends_per_repo(overall_commit_counts, repo_commit_counts):
+    """
+    Plot the overall commit trend and per-repository commit trends over time with improved scalability.
+
+    Args:
+        overall_commit_counts (pd.Series): Overall commit counts per month.
+        repo_commit_counts (pd.DataFrame): Commit counts per repository per month.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+    from math import ceil
+
+    num_repos = len(repo_commit_counts.columns)
+
+    # Dynamic figure sizing: Increase width with more repositories
+    base_width = 14
+    additional_width = ceil(num_repos / 10) * 2  # Adjust based on the number of repos
+    fig_width = base_width + additional_width
+    fig_height = 8
+    plt.figure(figsize=(fig_width, fig_height))
+
+    # Use a colormap that can handle more colors
+    cmap = plt.cm.get_cmap("tab20", num_repos)
+
+    # Plot per-repository commit trends first with transparency
+    for idx, repo in enumerate(repo_commit_counts.columns):
+        plt.plot(
+            repo_commit_counts.index, repo_commit_counts[repo], label=repo, color=cmap(idx), linewidth=1.0, alpha=0.6
+        )
+
+    # Plot overall commit trend on top with higher visibility
+    plt.plot(
+        overall_commit_counts.index, overall_commit_counts.values, label="Overall Commits", color="black", linewidth=2.5
+    )
+
+    plt.title("Commit Trends Over Time (Overall and Per Repository)", fontsize=16)
+    plt.xlabel("Month", fontsize=14)
+    plt.ylabel("Number of Commits", fontsize=14)
+    plt.grid(True, which="both", linestyle="--", linewidth=0.5)
+
+    # Optimize legend placement and styling
+    if num_repos > 15:
+        # For many repositories, place the legend outside and reduce font size
+        plt.legend(title="Repositories", bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8, ncol=2)
+    else:
+        plt.legend(title="Repositories", bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=10)
+
+    plt.tight_layout()
+    plt.show()
 
 
 def identify_prominent_authors(commits_df):
@@ -430,30 +477,84 @@ def calculate_pr_issue_proportion(issues_df):
     return proportion
 
 
-def analyze_approval_labels_effect(issues_df):
+def analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df):
     """
-    Analyze how different approval labels influence issue closure time.
+    Analyze whether there is a statistical difference in issue closure time across different
+    microservice sizes of repositories.
 
     Args:
         issues_df (pd.DataFrame): Enriched issue DataFrame.
+        csv_df (pd.DataFrame): Enriched CSV DataFrame containing microservice size information.
 
     Returns:
-        pd.DataFrame: DataFrame comparing resolution times with approval labels.
+        None
     """
-    labeled_issues = issues_df[issues_df["has_approval_label"]]
-    unlabeled_issues = issues_df[~issues_df["has_approval_label"]]
 
-    avg_resolution_labeled = labeled_issues["resolution_time"].mean()
-    avg_resolution_unlabeled = unlabeled_issues["resolution_time"].mean()
+    # Process repo names to standardize them
+    # For issues_df
+    def extract_owner_repo_from_issues(repo_name):
+        if repo_name.startswith("closed_issues_"):
+            repo_name = repo_name[len("closed_issues_") :]
+        elif repo_name.startswith("issues_"):
+            repo_name = repo_name[len("issues_") :]
+        elif repo_name.startswith("commits_"):
+            repo_name = repo_name[len("commits_") :]
+        owner_repo = repo_name.replace("_", "/")
+        return owner_repo
 
-    comparison = pd.DataFrame(
-        {
-            "Label": ["With Approval Label", "Without Approval Label"],
-            "Average Resolution Time (hours)": [avg_resolution_labeled, avg_resolution_unlabeled],
-        }
+    issues_df["repo_name_standardized"] = issues_df["repo_name"].apply(extract_owner_repo_from_issues)
+
+    # For csv_df
+    def extract_owner_repo_from_url(url):
+        try:
+            parts = url.rstrip("/").split("/")
+            owner = parts[-2]
+            repo = parts[-1]
+            owner_repo = f"{owner}/{repo}"
+            return owner_repo
+        except IndexError:
+            return None
+
+    csv_df["repo_name_standardized"] = csv_df["URL"].apply(extract_owner_repo_from_url)
+
+    # Now merge on 'repo_name_standardized'
+    merged_df = pd.merge(
+        issues_df, csv_df[["repo_name_standardized", "microservice_category"]], on="repo_name_standardized", how="left"
     )
 
-    return comparison
+    # Remove issues with missing 'microservice_category' or 'resolution_time'
+    merged_df = merged_df.dropna(subset=["microservice_category", "resolution_time"])
+
+    # Group resolution times by microservice category
+    groups = merged_df.groupby("microservice_category")["resolution_time"].apply(list)
+
+    # Perform Kruskal-Wallis H-test
+    from scipy.stats import kruskal
+
+    # Prepare data for the test
+    data = [groups[cat] for cat in groups.index]
+
+    # Check if we have at least two groups
+    if len(data) < 2:
+        print("Not enough groups for statistical testing.")
+        return
+
+    stat, p = kruskal(*data)
+
+    print("Kruskal-Wallis H-test:")
+    print(f"Statistic: {stat}, p-value: {p}")
+
+    if p < 0.05:
+        print(
+            "There is a statistically significant difference in issue closure times between microservice size categories."
+        )
+    else:
+        print(
+            "There is no statistically significant difference in issue closure times between microservice size categories."
+        )
+
+    # Plot the results
+    plot_issue_resolution_time_by_microservice_size(merged_df)
 
 
 # ---------------------------
@@ -596,6 +697,175 @@ def plot_approval_label_effect(comparison):
     plt.show()
 
 
+def plot_issue_resolution_time_by_microservice_size(merged_df):
+    """
+    Plot the distribution of issue resolution times per microservice size category.
+
+    Args:
+        merged_df (pd.DataFrame): DataFrame containing issues and microservice size categories.
+    """
+    import seaborn as sns
+
+    plt.figure(figsize=(12, 6))
+    sns.boxplot(x="microservice_category", y="resolution_time", data=merged_df)
+    plt.xlabel("Microservice Size Category", fontsize=12)
+    plt.ylabel("Resolution Time (hours)", fontsize=12)
+    plt.title("Issue Resolution Time by Microservice Size Category", fontsize=14)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+
+# ----------------------------------------
+
+
+def load_csv_data(file_path):
+    """
+    Load and process data from the CSV file.
+
+    Args:
+        file_path (str): Path to the CSV file.
+
+    Returns:
+        pd.DataFrame: DataFrame containing the CSV data.
+    """
+    import ast
+
+    csv_df = pd.read_csv(file_path, delimiter=";")
+
+    # Process the languages column
+    if "languages" in csv_df.columns:
+
+        def parse_languages(x):
+            try:
+                # Safely evaluate the string to a list
+                return ast.literal_eval(x)
+            except:
+                # Handle cases where parsing fails
+                return []
+
+        csv_df["languages_list"] = csv_df["languages"].apply(parse_languages)
+
+    # Ensure 'number_of_microservices' is numeric
+    if "num_services" in csv_df.columns:
+        csv_df["number_of_microservices"] = pd.to_numeric(csv_df["num_services"], errors="coerce")
+
+    return csv_df
+
+
+def enrich_csv_data(csv_df):
+    """
+    Enrich the CSV DataFrame with additional metrics and categorizations.
+
+    Args:
+        csv_df (pd.DataFrame): DataFrame containing CSV data.
+
+    Returns:
+        pd.DataFrame: Enriched DataFrame.
+    """
+    # Example: Count the number of languages used in each project
+    if "languages_list" in csv_df.columns:
+        csv_df["language_count"] = csv_df["languages_list"].apply(len)
+    else:
+        csv_df["language_count"] = 0
+
+    # Categorize projects based on the number of microservices
+    if "number_of_microservices" in csv_df.columns:
+
+        def categorize_microservices(num):
+            if pd.isnull(num):
+                return "Unknown"
+            elif num == 1:
+                return "Monolith"
+            elif 2 <= num <= 4:
+                return "Small Microservice Architecture"
+            elif 4 <= num <= 9:
+                return "Medium Microservice Architecture"
+            else:
+                return "Large Microservice Architecture"
+
+        csv_df["microservice_category"] = csv_df["number_of_microservices"].apply(categorize_microservices)
+    else:
+        csv_df["microservice_category"] = "Unknown"
+
+    return csv_df
+
+
+# ---------------------------
+# Analysis Functions for CSV Data
+# ---------------------------
+
+
+def analyze_language_usage(csv_df):
+    """
+    Analyze the usage frequency of programming languages.
+
+    Args:
+        csv_df (pd.DataFrame): Enriched CSV DataFrame.
+
+    Returns:
+        pd.Series: Language usage counts.
+    """
+    # Flatten the list of languages into a single list
+    all_languages = csv_df["languages_list"].explode()
+    print(all_languages)
+    language_counts = all_languages.value_counts()
+    return language_counts
+
+
+def analyze_microservice_distribution(csv_df):
+    """
+    Analyze the distribution of the number of microservices across projects.
+
+    Args:
+        csv_df (pd.DataFrame): Enriched CSV DataFrame.
+
+    Returns:
+        pd.Series: Counts of projects per microservice category.
+    """
+    microservice_counts = csv_df["microservice_category"].value_counts()
+    return microservice_counts
+
+
+# ---------------------------
+# Visualization Functions for CSV Data
+# ---------------------------
+
+
+def plot_language_usage(language_counts):
+    """
+    Plot the usage frequency of programming languages.
+
+    Args:
+        language_counts (pd.Series): Language usage counts.
+    """
+    top_languages = language_counts.head(15)
+    plt.figure(figsize=(12, 6))
+    top_languages.plot(kind="bar", color="teal")
+    plt.xlabel("Programming Language")
+    plt.ylabel("Number of Projects")
+    plt.title("Top Programming Languages Used in Projects")
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_microservice_distribution(microservice_counts):
+    """
+    Plot the distribution of microservice architectures across projects.
+
+    Args:
+        microservice_counts (pd.Series): Counts of projects per microservice category.
+    """
+    plt.figure(figsize=(8, 6))
+    microservice_counts.plot(
+        kind="pie", autopct="%1.1f%%", startangle=140, colors=["gold", "lightgreen", "skyblue", "lightcoral", "silver"]
+    )
+    plt.ylabel("")
+    plt.title("Distribution of Microservice Architectures")
+    plt.tight_layout()
+    plt.show()
+
+
 # ---------------------------
 # Main Analysis Function
 # ---------------------------
@@ -619,15 +889,38 @@ def main():
     # Step 4: Enrich issue data with additional metrics
     print("Enriching issue data...")
     issues_df = enrich_issue_data(issues_df)
+    # Step 5: Load and process CSV data
+    print("Loading CSV data...")
+    csv_df = load_csv_data(CSV_FILE_PATH)
+    print(f"Total projects loaded from CSV: {len(csv_df)}")
 
+    # Step 6: Enrich CSV data
+    print("Enriching CSV data...")
+    csv_df = enrich_csv_data(csv_df)
+
+    # ---------------------------
+    # CSV Data Analysis
+    # ---------------------------
+
+    # Analyze language usage
+    print("Analyzing programming language usage...")
+    language_counts = analyze_language_usage(csv_df)
+    plot_language_usage(language_counts)
+
+    # Analyze microservice distribution
+    print("Analyzing microservice distribution...")
+    microservice_counts = analyze_microservice_distribution(csv_df)
+    plot_microservice_distribution(microservice_counts)
+
+    analyze_language_usage(csv_df)
     # ---------------------------
     # RQ1 Analysis
     # ---------------------------
 
     # RQ1.1: Is community engagement increasing?
     print("Analyzing community engagement over time...")
-    commit_trends = analyze_commit_trends(commits_df)
-    plot_commit_trends(commit_trends)
+    overall_commit_trends, repo_commit_trends = analyze_commit_trends(commits_df)
+    plot_commit_trends_per_repo(overall_commit_trends, repo_commit_trends)
 
     # RQ1.2: Are there prominent authors or development teams?
     print("Identifying prominent authors...")
@@ -669,10 +962,9 @@ def main():
     pr_issue_proportion = calculate_pr_issue_proportion(issues_df)
     print(f"Proportion of Issues that are PRs: {pr_issue_proportion:.2%}")
 
-    # RQ2.6: Effect of approval labels on issue closure time
-    print("Analyzing effect of approval labels on issue closure time...")
-    approval_label_effect = analyze_approval_labels_effect(issues_df)
-    plot_approval_label_effect(approval_label_effect)
+    # RQ2.6: Is there a statistical difference between issue closure times with repository microservice size?
+    print("Analyzing issue resolution time by microservice size...")
+    analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df)
 
     print("Analysis complete.")
 
