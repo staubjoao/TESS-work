@@ -12,7 +12,7 @@ import seaborn as sns
 COMMITS_DATA_PATH = "data/commits/*.json"
 ISSUES_DATA_PATH = "data/issues/*.json"
 CSV_FILE_PATH = "dataset/dataset_filtrado.csv"
-PULL_FILES_DATA_PATH = "data/pull_requests/*.json"
+PULL_FILES_DATA_PATH = "data/pull_request/*.json"
 
 CORE_DEVELOPER_PERCENTILE = 0.8
 
@@ -172,23 +172,19 @@ def load_all_issues(data_path):
                 # Extract pull number from the pull_request URL
                 pull_request_url = issue["pull_request"]["url"]
                 # The URL format is: https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}
-                pull_number = int(pull_request_url.rstrip("/").split("/")[-1])
+                pull_number = pull_request_url.rstrip("/").split("/")[-1] if pull_request_url else None
             else:
                 is_pull_request = False
                 pull_number = None
-            if issue.get("closed_at"):
-                closed_at = datetime.strptime(issue["closed_at"], "%Y-%m-%dT%H:%M:%SZ")
-            else:
-                closed_at = None
             issue_data = {
                 "repo_name": repo_name,
                 "issue_number": issue["number"],
-                "pull_number": pull_number,  
+                "pull_number": pull_number,
                 "title": issue["title"],
                 "user": issue["user"]["login"] if issue.get("user") else None,
                 "state": issue["state"],
                 "created_at": datetime.strptime(issue["created_at"], "%Y-%m-%dT%H:%M:%SZ"),
-                "closed_at": closed_at,
+                "closed_at": datetime.strptime(issue["closed_at"], "%Y-%m-%dT%H:%M:%SZ"),
                 "labels": issue.get("labels", []),
                 "is_pull_request": is_pull_request,
                 "comments": issue.get("comments", 0),
@@ -197,6 +193,7 @@ def load_all_issues(data_path):
             all_issues.append(issue_data)
     issues_df = pd.DataFrame(all_issues)
     return issues_df
+
 
 def load_all_pull_requests(data_path):
     """
@@ -280,10 +277,7 @@ def enrich_issue_data(issues_df):
         pd.DataFrame: Enriched DataFrame.
     """
     # Calculate issue resolution time
-    issues_df["resolution_time"] = (
-        issues_df["closed_at"] - issues_df["created_at"]
-    ).dt.total_seconds() / 3600  # in hours
-
+    issues_df["resolution_time"] = (issues_df["closed_at"] - issues_df["created_at"]) / pd.Timedelta(days=1)
     # Categorize issues
     issues_df["issue_category"] = issues_df.apply(categorize_issue, axis=1)
 
@@ -452,19 +446,24 @@ def impact_of_pr_size_on_resolution_time(issues_df, prs_df):
         pd.DataFrame: DataFrame correlating PR size with resolution time.
     """
     # Filter closed pull requests in issues_df
-    prs_issues = issues_df[issues_df["is_pull_request"] & (issues_df["state"] == "closed")]
+    # prs_issues = issues_df[issues_df["is_pull_request"] & (issues_df["state"] == "closed")]
 
-    # Merge prs_issues with prs_df on 'repo_name' and 'issue_number' == 'pull_number'
-    prs_issues = prs_issues.merge(
-        prs_df, left_on=["repo_name", "issue_number"], right_on=["repo_name", "pull_number"], how="inner"
-    )
+    print(issues_df.head())
+
+    print(prs_df.head())
+
+    # tranform the pull_number to string
+    prs_df["pull_number"] = prs_df["pull_number"].astype(str)
+    issues_df["pull_number"] = issues_df["pull_number"].astype(str)
+
+    prs_issues = issues_df.merge(prs_df, on=["pull_number", "pull_number"], how="inner")
 
     # Calculate total changes
     prs_issues["total_changes"] = prs_issues["additions"] + prs_issues["deletions"]
 
     # Analyze the impact
     impact_df = prs_issues[["total_changes", "resolution_time"]]
-
+    print(impact_df.head())
     return impact_df
 
 
@@ -677,7 +676,12 @@ def plot_pr_size_vs_resolution_time(impact_df):
         impact_df (pd.DataFrame): DataFrame correlating PR size with resolution time.
     """
     plt.figure(figsize=(10, 6))
-    plt.scatter(impact_df["total_changes"], impact_df["resolution_time"], alpha=0.7)
+    print(impact_df)
+    # save to xlsx
+    impact_df.to_excel("impact_df.xlsx")
+
+    plt.scatter(x=impact_df["total_changes"], y=impact_df["resolution_time"], alpha=0.7)
+
     plt.xlabel("PR Size (Lines Changed)")
     plt.ylabel("Resolution Time (hours)")
     plt.title("Impact of PR Size on Issue Resolution Time")
@@ -929,69 +933,69 @@ def main():
     # CSV Data Analysis
     # ---------------------------
 
-    # Analyze language usage
-    print("Analyzing programming language usage...")
-    language_counts = analyze_language_usage(csv_df)
-    plot_language_usage(language_counts)
+    # # Analyze language usage
+    # print("Analyzing programming language usage...")
+    # language_counts = analyze_language_usage(csv_df)
+    # plot_language_usage(language_counts)
 
-    # Analyze microservice distribution
-    print("Analyzing microservice distribution...")
-    microservice_counts = analyze_microservice_distribution(csv_df)
-    plot_microservice_distribution(microservice_counts)
+    # # Analyze microservice distribution
+    # print("Analyzing microservice distribution...")
+    # microservice_counts = analyze_microservice_distribution(csv_df)
+    # plot_microservice_distribution(microservice_counts)
 
-    analyze_language_usage(csv_df)
-    # ---------------------------
-    # RQ1 Analysis
-    # ---------------------------
+    # analyze_language_usage(csv_df)
+    # # ---------------------------
+    # # RQ1 Analysis
+    # # ---------------------------
 
-    # RQ1.1: Is community engagement increasing?
-    print("Analyzing community engagement over time...")
-    overall_commit_trends, repo_commit_trends = analyze_commit_trends(commits_df)
-    plot_commit_trends_per_repo(overall_commit_trends, repo_commit_trends)
+    # # RQ1.1: Is community engagement increasing?
+    # print("Analyzing community engagement over time...")
+    # overall_commit_trends, repo_commit_trends = analyze_commit_trends(commits_df)
+    # plot_commit_trends_per_repo(overall_commit_trends, repo_commit_trends)
 
-    # RQ1.2: Are there prominent authors or development teams?
-    print("Identifying prominent authors...")
-    prominent_authors = identify_prominent_authors(commits_df)
-    plot_prominent_authors(prominent_authors)
+    # # RQ1.2: Are there prominent authors or development teams?
+    # print("Identifying prominent authors...")
+    # prominent_authors = identify_prominent_authors(commits_df)
+    # plot_prominent_authors(prominent_authors)
 
-    # RQ1.3: Do authors contribute to multiple projects?
-    print("Analyzing cross-project contributions...")
-    author_projects = analyze_author_cross_project_contributions(commits_df)
-    plot_author_project_contributions(author_projects)
+    # # RQ1.3: Do authors contribute to multiple projects?
+    # print("Analyzing cross-project contributions...")
+    # author_projects = analyze_author_cross_project_contributions(commits_df)
+    # plot_author_project_contributions(author_projects)
 
-    # ---------------------------
-    # RQ2 Analysis
-    # ---------------------------
+    # # ---------------------------
+    # # RQ2 Analysis
+    # # ---------------------------
 
-    # RQ2.1: What is the average issue resolution time?
-    print("Calculating average issue resolution time...")
-    avg_resolution_time = calculate_average_issue_resolution_time(issues_df)
-    print(f"Average Issue Resolution Time: {avg_resolution_time:.2f} hours")
-    plot_issue_resolution_time(issues_df)
+    # # RQ2.1: What is the average issue resolution time?
+    # print("Calculating average issue resolution time...")
+    # avg_resolution_time = calculate_average_issue_resolution_time(issues_df)
+    # print(f"Average Issue Resolution Time: {avg_resolution_time:.2f} hours")
+    # plot_issue_resolution_time(issues_df)
 
-    # RQ2.2: What types of issues are most common?
-    print("Finding most common issue types...")
-    issue_type_counts = find_most_common_issue_types(issues_df)
-    plot_issue_types(issue_type_counts)
+    # # RQ2.2: What types of issues are most common?
+    # print("Finding most common issue types...")
+    # issue_type_counts = find_most_common_issue_types(issues_df)
+    # plot_issue_types(issue_type_counts)
 
     # RQ2.3: Impact of PR size on issue resolution time
     print("Analyzing impact of PR size on issue resolution time...")
     impact_df = impact_of_pr_size_on_resolution_time(issues_df, prs_df)
     plot_pr_size_vs_resolution_time(impact_df)
 
-    # RQ2.4: Most active contributors in issue resolution
-    print("Identifying most active contributors in issue resolution...")
-    active_contributors = identify_active_issue_contributors(issues_df)
-    plot_active_issue_contributors(active_contributors)
+    # # RQ2.4: Most active contributors in issue resolution
+    # print("Identifying most active contributors in issue resolution...")
+    # active_contributors = identify_active_issue_contributors(issues_df)
+    # plot_active_issue_contributors(active_contributors)
 
-    # RQ2.5: Proportion of issues that are PRs
-    print("Calculating proportion of issues that are PRs...")
-    pr_issue_proportion = calculate_pr_issue_proportion(issues_df)
-    print(f"Proportion of Issues that are PRs: {pr_issue_proportion:.2%}")
+    # # RQ2.5: Proportion of issues that are PRs
+    # print("Calculating proportion of issues that are PRs...")
+    # pr_issue_proportion = calculate_pr_issue_proportion(issues_df)
+    # print(f"Proportion of Issues that are PRs: {pr_issue_proportion:.2%}")
 
-    # RQ2.6: Is there a statistical difference between issue closure times with repository microservice size?
-    print("Analyzing issue resolution time by microservice size...")
-    analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df)
+    # # RQ2.6: Is there a statistical difference between issue closure times with repository microservice size?
+    # print("Analyzing issue resolution time by microservice size...")
+    # analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df)
 
     print("Analysis complete.")
 
