@@ -9,22 +9,12 @@ import networkx as nx
 import pandas as pd
 import seaborn as sns
 
-# ---------------------------
-# Configuration and Constants
-# ---------------------------
-
-# Paths to the directories containing JSON files
 COMMITS_DATA_PATH = "data/commits/*.json"
 ISSUES_DATA_PATH = "data/issues/*.json"
 CSV_FILE_PATH = "dataset/dataset_filtrado.csv"
+PULL_FILES_DATA_PATH = "data/pull_requests/*.json"
 
-# Threshold percentile to define core developers (e.g., top 20%)
 CORE_DEVELOPER_PERCENTILE = 0.8
-
-
-# ---------------------------
-# Utility Functions
-# ---------------------------
 
 
 def load_json_data(file_path):
@@ -179,8 +169,13 @@ def load_all_issues(data_path):
         for issue in data:
             if "pull_request" in issue:
                 is_pull_request = True
+                # Extract pull number from the pull_request URL
+                pull_request_url = issue["pull_request"]["url"]
+                # The URL format is: https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}
+                pull_number = int(pull_request_url.rstrip("/").split("/")[-1])
             else:
                 is_pull_request = False
+                pull_number = None
             if issue.get("closed_at"):
                 closed_at = datetime.strptime(issue["closed_at"], "%Y-%m-%dT%H:%M:%SZ")
             else:
@@ -188,6 +183,7 @@ def load_all_issues(data_path):
             issue_data = {
                 "repo_name": repo_name,
                 "issue_number": issue["number"],
+                "pull_number": pull_number,  
                 "title": issue["title"],
                 "user": issue["user"]["login"] if issue.get("user") else None,
                 "state": issue["state"],
@@ -201,6 +197,35 @@ def load_all_issues(data_path):
             all_issues.append(issue_data)
     issues_df = pd.DataFrame(all_issues)
     return issues_df
+
+def load_all_pull_requests(data_path):
+    """
+    Load and aggregate pull request data from all JSON files in the specified directory.
+
+    Args:
+        data_path (str): Glob pattern to match JSON files.
+
+    Returns:
+        pd.DataFrame: DataFrame containing all pull request data.
+    """
+    all_prs = []
+    for file_path in glob(data_path):
+        repo_name = os.path.splitext(os.path.basename(file_path))[0]
+        # Remove 'pull_files_' prefix to get the repo name
+        if repo_name.startswith("pull_files_"):
+            repo_name = repo_name[len("pull_files_") :]
+        data = load_json_data(file_path)
+        for pr in data:
+            pr_data = {
+                "repo_name": repo_name,
+                "pull_number": pr.get("pull_number"),
+                "additions": pr.get("additions", 0),
+                "deletions": pr.get("deletions", 0),
+                "changed_files": pr.get("changed_files", 0),
+            }
+            all_prs.append(pr_data)
+    prs_df = pd.DataFrame(all_prs)
+    return prs_df
 
 
 # ---------------------------
@@ -415,32 +440,30 @@ def find_most_common_issue_types(issues_df):
     return issue_type_counts
 
 
-def impact_of_pr_size_on_resolution_time(issues_df, commits_df):
+def impact_of_pr_size_on_resolution_time(issues_df, prs_df):
     """
     Analyze the impact of pull request size on issue resolution time.
 
     Args:
         issues_df (pd.DataFrame): Enriched issue DataFrame.
-        commits_df (pd.DataFrame): Enriched commit DataFrame.
+        prs_df (pd.DataFrame): DataFrame containing pull request sizes.
 
     Returns:
         pd.DataFrame: DataFrame correlating PR size with resolution time.
     """
-    # Filter pull requests
-    prs = issues_df[issues_df["is_pull_request"] & issues_df["state"] == "closed"]
+    # Filter closed pull requests in issues_df
+    prs_issues = issues_df[issues_df["is_pull_request"] & (issues_df["state"] == "closed")]
 
-    # Assume we have a way to get the size of each PR (e.g., additions and deletions)
-    # For this example, we will simulate PR sizes using commit sizes
-    pr_sizes = (
-        commits_df.groupby("repo_name").agg({"commit_size": "mean"}).rename(columns={"commit_size": "average_pr_size"})
+    # Merge prs_issues with prs_df on 'repo_name' and 'issue_number' == 'pull_number'
+    prs_issues = prs_issues.merge(
+        prs_df, left_on=["repo_name", "issue_number"], right_on=["repo_name", "pull_number"], how="inner"
     )
-    pr_sizes = pr_sizes.reset_index()
 
-    # Merge PR sizes with PRs
-    prs = prs.merge(pr_sizes, on="repo_name", how="left")
+    # Calculate total changes
+    prs_issues["total_changes"] = prs_issues["additions"] + prs_issues["deletions"]
 
     # Analyze the impact
-    impact_df = prs[["average_pr_size", "resolution_time"]]
+    impact_df = prs_issues[["total_changes", "resolution_time"]]
 
     return impact_df
 
@@ -654,8 +677,8 @@ def plot_pr_size_vs_resolution_time(impact_df):
         impact_df (pd.DataFrame): DataFrame correlating PR size with resolution time.
     """
     plt.figure(figsize=(10, 6))
-    plt.scatter(impact_df["average_pr_size"], impact_df["resolution_time"], alpha=0.7)
-    plt.xlabel("Average PR Size (Lines Changed)")
+    plt.scatter(impact_df["total_changes"], impact_df["resolution_time"], alpha=0.7)
+    plt.xlabel("PR Size (Lines Changed)")
     plt.ylabel("Resolution Time (hours)")
     plt.title("Impact of PR Size on Issue Resolution Time")
     plt.grid(True)
@@ -856,12 +879,12 @@ def plot_microservice_distribution(microservice_counts):
     Args:
         microservice_counts (pd.Series): Counts of projects per microservice category.
     """
-    plt.figure(figsize=(8, 6))
-    microservice_counts.plot(
-        kind="pie", autopct="%1.1f%%", startangle=140, colors=["gold", "lightgreen", "skyblue", "lightcoral", "silver"]
-    )
-    plt.ylabel("")
+    plt.figure(figsize=(10, 6))
+    microservice_counts.plot(kind="bar", color="skyblue")
+    plt.xlabel("Microservice Size Category")
+    plt.ylabel("Number of Projects")
     plt.title("Distribution of Microservice Architectures")
+    plt.xticks(rotation=45)
     plt.tight_layout()
     plt.show()
 
@@ -893,6 +916,10 @@ def main():
     print("Loading CSV data...")
     csv_df = load_csv_data(CSV_FILE_PATH)
     print(f"Total projects loaded from CSV: {len(csv_df)}")
+
+    print("Loading pull request data...")
+    prs_df = load_all_pull_requests(PULL_FILES_DATA_PATH)
+    print(f"Total pull requests loaded: {len(prs_df)}")
 
     # Step 6: Enrich CSV data
     print("Enriching CSV data...")
@@ -949,7 +976,7 @@ def main():
 
     # RQ2.3: Impact of PR size on issue resolution time
     print("Analyzing impact of PR size on issue resolution time...")
-    impact_df = impact_of_pr_size_on_resolution_time(issues_df, commits_df)
+    impact_df = impact_of_pr_size_on_resolution_time(issues_df, prs_df)
     plot_pr_size_vs_resolution_time(impact_df)
 
     # RQ2.4: Most active contributors in issue resolution
