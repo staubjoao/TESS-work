@@ -14,8 +14,6 @@ ISSUES_DATA_PATH = "data/issues/*.json"
 CSV_FILE_PATH = "dataset/dataset_filtrado.csv"
 PULL_FILES_DATA_PATH = "data/pull_request/*.json"
 
-CORE_DEVELOPER_PERCENTILE = 0.8
-
 
 def load_json_data(file_path):
     """
@@ -30,21 +28,6 @@ def load_json_data(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data
-
-
-def is_high_quality(message):
-    """
-    Determine if a commit message is of high quality based on conventional commit guidelines.
-
-    Args:
-        message (str): Commit message.
-
-    Returns:
-        bool: True if high quality, False otherwise.
-    """
-    # Check if the message follows the conventional commits format
-    pattern = r"^(feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert|merge)(\(\w+\))?: .+"
-    return bool(re.match(pattern, message.strip()))
 
 
 def categorize_phase(age_days):
@@ -123,7 +106,7 @@ def load_all_commits(data_path):
     Load and aggregate commit data from all JSON files in the specified directory.
 
     Args:
-        data_path (str): Glob pattern to match JSON files.
+        data_path (str): Path to match JSON files.
 
     Returns:
         pd.DataFrame: DataFrame containing all commit data with additional metadata.
@@ -157,21 +140,19 @@ def load_all_issues(data_path):
     Load and aggregate issue data from all JSON files in the specified directory.
 
     Args:
-        data_path (str): Glob pattern to match JSON files.
+        data_path (str): Path to match JSON files.
 
     Returns:
         pd.DataFrame: DataFrame containing all issue data.
     """
     all_issues = []
     for file_path in glob(data_path):
-        repo_name = os.path.splitext(os.path.basename(file_path))[0]
+        repo_name = os.path.splitext(os.path.basename(file_path))[0].replace("closed_issues_", "")
         data = load_json_data(file_path)
         for issue in data:
             if "pull_request" in issue:
                 is_pull_request = True
-                # Extract pull number from the pull_request URL
                 pull_request_url = issue["pull_request"]["url"]
-                # The URL format is: https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}
                 pull_number = pull_request_url.rstrip("/").split("/")[-1] if pull_request_url else None
             else:
                 is_pull_request = False
@@ -200,7 +181,7 @@ def load_all_pull_requests(data_path):
     Load and aggregate pull request data from all JSON files in the specified directory.
 
     Args:
-        data_path (str): Glob pattern to match JSON files.
+        data_path (str): Path to JSON files.
 
     Returns:
         pd.DataFrame: DataFrame containing all pull request data.
@@ -254,14 +235,12 @@ def enrich_commit_data(commits_df):
     # Categorize repository phase
     commits_df["phase"] = commits_df["repo_age_days"].apply(categorize_phase)
 
-    # Assess commit message quality
-    commits_df["high_quality_msg"] = commits_df["message"].apply(is_high_quality)
-
     # Categorize commit messages
     commits_df["commit_category"] = commits_df["message"].apply(categorize_commit_message)
 
     # Calculate commit size
     commits_df["commit_size"] = commits_df["additions"] + commits_df["deletions"]
+    commits_df["user_issue_counts"] = commits_df.groupby("author").size()
 
     return commits_df
 
@@ -276,8 +255,9 @@ def enrich_issue_data(issues_df):
     Returns:
         pd.DataFrame: Enriched DataFrame.
     """
-    # Calculate issue resolution time
+    # save issues_df to a xlsx
     issues_df["resolution_time"] = (issues_df["closed_at"] - issues_df["created_at"]) / pd.Timedelta(days=1)
+
     # Categorize issues
     issues_df["issue_category"] = issues_df.apply(categorize_issue, axis=1)
 
@@ -413,7 +393,7 @@ def calculate_average_issue_resolution_time(issues_df):
         issues_df (pd.DataFrame): Enriched issue DataFrame.
 
     Returns:
-        float: Average resolution time in hours.
+        float: Average resolution time in days.
     """
     resolved_issues = issues_df[issues_df["state"] == "closed"]
     average_resolution_time = resolved_issues["resolution_time"].mean()
@@ -445,42 +425,53 @@ def impact_of_pr_size_on_resolution_time(issues_df, prs_df):
     Returns:
         pd.DataFrame: DataFrame correlating PR size with resolution time.
     """
-    # Filter closed pull requests in issues_df
-    # prs_issues = issues_df[issues_df["is_pull_request"] & (issues_df["state"] == "closed")]
-
-    print(issues_df.head())
-
-    print(prs_df.head())
 
     # tranform the pull_number to string
     prs_df["pull_number"] = prs_df["pull_number"].astype(str)
     issues_df["pull_number"] = issues_df["pull_number"].astype(str)
 
-    prs_issues = issues_df.merge(prs_df, on=["pull_number", "pull_number"], how="inner")
+    prs_issues = issues_df.merge(prs_df, on=["repo_name", "pull_number"], how="inner")
 
     # Calculate total changes
     prs_issues["total_changes"] = prs_issues["additions"] + prs_issues["deletions"]
 
     # Analyze the impact
     impact_df = prs_issues[["total_changes", "resolution_time"]]
-    print(impact_df.head())
     return impact_df
 
 
-def identify_active_issue_contributors(issues_df):
+def plot_contributor_count_vs_resolution_time(issues_df):
     """
-    Identify the most active contributors in issue resolution.
+    Plot the impact of the number of contributors on issue resolution time.
 
     Args:
         issues_df (pd.DataFrame): Enriched issue DataFrame.
-
-    Returns:
-        pd.DataFrame: DataFrame with users and the number of issues they closed.
     """
-    closed_issues = issues_df[issues_df["state"] == "closed"]
-    user_issue_counts = closed_issues.groupby("user").size().rename("issues_closed").reset_index()
-    active_contributors = user_issue_counts.sort_values(by="issues_closed", ascending=False)
-    return active_contributors
+    # Calculate the number of unique contributors per repository
+    contributor_counts = issues_df.groupby("repo_name")["user"].nunique().rename("contributor_count").reset_index()
+
+    # Calculate the average resolution time per repository
+    avg_resolution_times = (
+        issues_df[issues_df["state"] == "closed"]
+        .groupby("repo_name")["resolution_time"]
+        .mean()
+        .rename("avg_resolution_time")
+        .reset_index()
+    )
+
+    # Merge contributor counts with average resolution times
+    merged_df = pd.merge(contributor_counts, avg_resolution_times, on="repo_name")
+
+    # Plot the relationship
+    plt.figure(figsize=(10, 6))
+    plt.scatter(x=merged_df["contributor_count"], y=merged_df["avg_resolution_time"], alpha=0.7, color="purple")
+
+    plt.xlabel("Number of Contributors")
+    plt.ylabel("Average Resolution Time (days)")
+    plt.title("Impact of Number of Contributors on Issue Resolution Time")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 
 
 def calculate_pr_issue_proportion(issues_df):
@@ -502,7 +493,7 @@ def calculate_pr_issue_proportion(issues_df):
 def analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df):
     """
     Analyze whether there is a statistical difference in issue closure time across different
-    microservice sizes of repositories.
+    microservice sizes of repositories, and perform a Dunn test for pairwise comparisons.
 
     Args:
         issues_df (pd.DataFrame): Enriched issue DataFrame.
@@ -547,6 +538,9 @@ def analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df):
     # Remove issues with missing 'microservice_category' or 'resolution_time'
     merged_df = merged_df.dropna(subset=["microservice_category", "resolution_time"])
 
+    # Remove outliers in 'resolution_time'
+    merged_df = remove_outliers(merged_df, "resolution_time", lower_percentile=0.05, upper_percentile=0.95)
+
     # Group resolution times by microservice category
     groups = merged_df.groupby("microservice_category")["resolution_time"].apply(list)
 
@@ -564,12 +558,32 @@ def analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df):
     stat, p = kruskal(*data)
 
     print("Kruskal-Wallis H-test:")
-    print(f"Statistic: {stat}, p-value: {p}")
+    print(f"Statistic: {stat:.4f}, p-value: {p:.4f}")
 
     if p < 0.05:
         print(
             "There is a statistically significant difference in issue closure times between microservice size categories."
         )
+
+        # Perform Dunn's test for pairwise comparisons
+        import scikit_posthocs as sp
+
+        # Create a new DataFrame for the Dunn test
+        dunn_df = merged_df[["microservice_category", "resolution_time"]].copy()
+
+        # Perform Dunn's test
+        dunn_results = sp.posthoc_dunn(
+            dunn_df, val_col="resolution_time", group_col="microservice_category", p_adjust="bonferroni"
+        )
+
+        print("\nDunn's test results (p-values):")
+        print(dunn_results)
+
+        # Interpret the Dunn test results
+        print("\nSignificant pairwise differences (p < 0.05):")
+        significant_pairs = dunn_results.where(dunn_results < 0.05)
+        print(significant_pairs)
+
     else:
         print(
             "There is no statistically significant difference in issue closure times between microservice size categories."
@@ -577,6 +591,26 @@ def analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df):
 
     # Plot the results
     plot_issue_resolution_time_by_microservice_size(merged_df)
+
+
+def remove_outliers(df, column, lower_percentile=0.05, upper_percentile=0.95):
+    """
+    Remove outliers from a DataFrame based on specified percentiles.
+
+    Args:
+        df (pd.DataFrame): The DataFrame to process.
+        column (str): The column to check for outliers.
+        lower_percentile (float): The lower percentile threshold.
+        upper_percentile (float): The upper percentile threshold.
+
+    Returns:
+        pd.DataFrame: DataFrame with outliers removed.
+    """
+    lower = df[column].quantile(lower_percentile)
+    upper = df[column].quantile(upper_percentile)
+    filtered_df = df[(df[column] >= lower) & (df[column] <= upper)]
+    print(f"Removed outliers: {len(df) - len(filtered_df)} rows")
+    return filtered_df
 
 
 # ---------------------------
@@ -646,7 +680,7 @@ def plot_issue_resolution_time(issues_df):
     resolved_issues = issues_df[issues_df["state"] == "closed"]
     plt.figure(figsize=(10, 6))
     plt.hist(resolved_issues["resolution_time"], bins=50, color="coral")
-    plt.xlabel("Resolution Time (hours)")
+    plt.xlabel("Resolution Time (days)")
     plt.ylabel("Number of Issues")
     plt.title("Distribution of Issue Resolution Times")
     plt.tight_layout()
@@ -676,14 +710,11 @@ def plot_pr_size_vs_resolution_time(impact_df):
         impact_df (pd.DataFrame): DataFrame correlating PR size with resolution time.
     """
     plt.figure(figsize=(10, 6))
-    print(impact_df)
-    # save to xlsx
-    impact_df.to_excel("impact_df.xlsx")
 
     plt.scatter(x=impact_df["total_changes"], y=impact_df["resolution_time"], alpha=0.7)
 
     plt.xlabel("PR Size (Lines Changed)")
-    plt.ylabel("Resolution Time (hours)")
+    plt.ylabel("Resolution Time (days)")
     plt.title("Impact of PR Size on Issue Resolution Time")
     plt.grid(True)
     plt.tight_layout()
@@ -716,9 +747,9 @@ def plot_approval_label_effect(comparison):
         comparison (pd.DataFrame): DataFrame comparing resolution times with approval labels.
     """
     plt.figure(figsize=(8, 6))
-    plt.bar(comparison["Label"], comparison["Average Resolution Time (hours)"], color=["gold", "silver"])
+    plt.bar(comparison["Label"], comparison["Average Resolution Time (days)"], color=["gold", "silver"])
     plt.xlabel("Approval Label Presence")
-    plt.ylabel("Average Resolution Time (hours)")
+    plt.ylabel("Average Resolution Time (days)")
     plt.title("Effect of Approval Labels on Issue Resolution Time")
     plt.tight_layout()
     plt.show()
@@ -736,7 +767,7 @@ def plot_issue_resolution_time_by_microservice_size(merged_df):
     plt.figure(figsize=(12, 6))
     sns.boxplot(x="microservice_category", y="resolution_time", data=merged_df)
     plt.xlabel("Microservice Size Category", fontsize=12)
-    plt.ylabel("Resolution Time (hours)", fontsize=12)
+    plt.ylabel("Resolution Time (days)", fontsize=12)
     plt.title("Issue Resolution Time by Microservice Size Category", fontsize=14)
     plt.xticks(rotation=45)
     plt.tight_layout()
@@ -835,7 +866,6 @@ def analyze_language_usage(csv_df):
     """
     # Flatten the list of languages into a single list
     all_languages = csv_df["languages_list"].explode()
-    print(all_languages)
     language_counts = all_languages.value_counts()
     return language_counts
 
@@ -878,13 +908,26 @@ def plot_language_usage(language_counts):
 
 def plot_microservice_distribution(microservice_counts):
     """
-    Plot the distribution of microservice architectures across projects.
+    Plot the distribution of microservice architectures across projects with different colors for each category
+    and display the percentage.
 
     Args:
         microservice_counts (pd.Series): Counts of projects per microservice category.
     """
     plt.figure(figsize=(10, 6))
-    microservice_counts.plot(kind="bar", color="skyblue")
+
+    # Calculate percentages
+    total_projects = microservice_counts.sum()
+    percentages = (microservice_counts / total_projects) * 100
+
+    # Plot with different colors
+    colors = sns.color_palette("husl", len(microservice_counts))
+    microservice_counts.plot(kind="bar", color=colors)
+
+    # Annotate bars with percentages
+    for i, (count, percentage) in enumerate(zip(microservice_counts, percentages)):
+        plt.text(i, count, f"{percentage:.1f}%", ha="center", va="bottom")
+
     plt.xlabel("Microservice Size Category")
     plt.ylabel("Number of Projects")
     plt.title("Distribution of Microservice Architectures")
@@ -933,69 +976,73 @@ def main():
     # CSV Data Analysis
     # ---------------------------
 
-    # # Analyze language usage
-    # print("Analyzing programming language usage...")
-    # language_counts = analyze_language_usage(csv_df)
-    # plot_language_usage(language_counts)
+    # Analyze language usage
+    print("Analyzing programming language usage...")
+    language_counts = analyze_language_usage(csv_df)
+    plot_language_usage(language_counts)
 
-    # # Analyze microservice distribution
-    # print("Analyzing microservice distribution...")
-    # microservice_counts = analyze_microservice_distribution(csv_df)
-    # plot_microservice_distribution(microservice_counts)
+    # Analyze microservice distribution
+    print("Analyzing microservice distribution...")
+    microservice_counts = analyze_microservice_distribution(csv_df)
+    plot_microservice_distribution(microservice_counts)
 
-    # analyze_language_usage(csv_df)
-    # # ---------------------------
-    # # RQ1 Analysis
-    # # ---------------------------
+    analyze_language_usage(csv_df)
+    # ---------------------------
+    # RQ1 Analysis
+    # ---------------------------
 
-    # # RQ1.1: Is community engagement increasing?
-    # print("Analyzing community engagement over time...")
-    # overall_commit_trends, repo_commit_trends = analyze_commit_trends(commits_df)
-    # plot_commit_trends_per_repo(overall_commit_trends, repo_commit_trends)
+    # RQ1.1: Is community engagement increasing?
+    print("Analyzing community engagement over time...")
+    overall_commit_trends, repo_commit_trends = analyze_commit_trends(commits_df)
+    plot_commit_trends_per_repo(overall_commit_trends, repo_commit_trends)
 
-    # # RQ1.2: Are there prominent authors or development teams?
-    # print("Identifying prominent authors...")
-    # prominent_authors = identify_prominent_authors(commits_df)
-    # plot_prominent_authors(prominent_authors)
+    # RQ1.2: Are there prominent authors or development teams?
+    print("Identifying prominent authors...")
+    prominent_authors = identify_prominent_authors(commits_df)
+    plot_prominent_authors(prominent_authors)
 
-    # # RQ1.3: Do authors contribute to multiple projects?
-    # print("Analyzing cross-project contributions...")
-    # author_projects = analyze_author_cross_project_contributions(commits_df)
-    # plot_author_project_contributions(author_projects)
+    # RQ1.3: Do authors contribute to multiple projects?
+    print("Analyzing cross-project contributions...")
+    author_projects = analyze_author_cross_project_contributions(commits_df)
+    plot_author_project_contributions(author_projects)
 
-    # # ---------------------------
-    # # RQ2 Analysis
-    # # ---------------------------
+    # ---------------------------
+    # RQ2 Analysis
+    # ---------------------------
 
-    # # RQ2.1: What is the average issue resolution time?
-    # print("Calculating average issue resolution time...")
-    # avg_resolution_time = calculate_average_issue_resolution_time(issues_df)
-    # print(f"Average Issue Resolution Time: {avg_resolution_time:.2f} hours")
-    # plot_issue_resolution_time(issues_df)
+    # RQ2.1: What is the average issue resolution time?
+    print("Calculating average issue resolution time...")
+    avg_resolution_time = calculate_average_issue_resolution_time(issues_df)
+    print(f"Average Issue Resolution Time: {avg_resolution_time:.2f} days")
+    plot_issue_resolution_time(issues_df)
 
-    # # RQ2.2: What types of issues are most common?
-    # print("Finding most common issue types...")
-    # issue_type_counts = find_most_common_issue_types(issues_df)
-    # plot_issue_types(issue_type_counts)
+    # RQ2.2: What types of issues are most common?
+    print("Finding most common issue types...")
+    issue_type_counts = find_most_common_issue_types(issues_df)
+    plot_issue_types(issue_type_counts)
 
     # RQ2.3: Impact of PR size on issue resolution time
     print("Analyzing impact of PR size on issue resolution time...")
     impact_df = impact_of_pr_size_on_resolution_time(issues_df, prs_df)
     plot_pr_size_vs_resolution_time(impact_df)
 
-    # # RQ2.4: Most active contributors in issue resolution
-    # print("Identifying most active contributors in issue resolution...")
-    # active_contributors = identify_active_issue_contributors(issues_df)
-    # plot_active_issue_contributors(active_contributors)
+    impact_df_no_outliers = remove_outliers(impact_df, "resolution_time", lower_percentile=0.05, upper_percentile=0.95)
 
-    # # RQ2.5: Proportion of issues that are PRs
-    # print("Calculating proportion of issues that are PRs...")
-    # pr_issue_proportion = calculate_pr_issue_proportion(issues_df)
-    # print(f"Proportion of Issues that are PRs: {pr_issue_proportion:.2%}")
+    # Plot without outliers
+    print("Plotting PR size vs. resolution time (without outliers)...")
+    plot_pr_size_vs_resolution_time(impact_df_no_outliers)
 
-    # # RQ2.6: Is there a statistical difference between issue closure times with repository microservice size?
-    # print("Analyzing issue resolution time by microservice size...")
-    # analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df)
+    # RQ2.4: Impact of Contributors size on issue resolution time
+    plot_contributor_count_vs_resolution_time(issues_df)
+
+    # RQ2.5: Proportion of issues that are PRs
+    print("Calculating proportion of issues that are PRs...")
+    pr_issue_proportion = calculate_pr_issue_proportion(issues_df)
+    print(f"Proportion of Issues that are PRs: {pr_issue_proportion:.2%}")
+
+    # RQ2.6: Is there a statistical difference between issue closure times with repository microservice size?
+    print("Analyzing issue resolution time by microservice size...")
+    analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df)
 
     print("Analysis complete.")
 
