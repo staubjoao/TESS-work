@@ -30,51 +30,6 @@ def load_json_data(file_path):
     return data
 
 
-def categorize_phase(age_days):
-    """
-    Categorize the repository phase based on its age in days.
-
-    Args:
-        age_days (int): Age of the repository in days.
-
-    Returns:
-        str: Phase category.
-    """
-    if age_days < 30:
-        return "Initial Development"
-    elif 30 <= age_days < 180:
-        return "Growth"
-    elif 180 <= age_days < 365:
-        return "Stabilization"
-    else:
-        return "Maturity"
-
-
-def categorize_commit_message(message):
-    """
-    Categorize commit message into predefined categories.
-
-    Args:
-        message (str): Commit message.
-
-    Returns:
-        str: Category label.
-    """
-    message = message.lower()
-    if "fix" in message or "bug" in message:
-        return "Bug Fix"
-    elif "feature" in message or "feat" in message or "add" in message or "implement" in message:
-        return "Feature"
-    elif "refactor" in message or "clean up" in message or "cleanup" in message:
-        return "Refactor"
-    elif "docs" in message or "documentation" in message:
-        return "Documentation"
-    elif "test" in message or "tests" in message:
-        return "Test"
-    else:
-        return "Other"
-
-
 def categorize_issue(issue):
     """
     Categorize issue based on its labels.
@@ -231,12 +186,6 @@ def enrich_commit_data(commits_df):
     # Calculate repository age in days
     commits_df["repo_start_date"] = commits_df.groupby("repo_name")["date"].transform("min")
     commits_df["repo_age_days"] = (commits_df["date"] - commits_df["repo_start_date"]).dt.days
-
-    # Categorize repository phase
-    commits_df["phase"] = commits_df["repo_age_days"].apply(categorize_phase)
-
-    # Categorize commit messages
-    commits_df["commit_category"] = commits_df["message"].apply(categorize_commit_message)
 
     # Calculate commit size
     commits_df["commit_size"] = commits_df["additions"] + commits_df["deletions"]
@@ -400,20 +349,6 @@ def calculate_average_issue_resolution_time(issues_df):
     return average_resolution_time
 
 
-def find_most_common_issue_types(issues_df):
-    """
-    Find the most common types of issues in the repository.
-
-    Args:
-        issues_df (pd.DataFrame): Enriched issue DataFrame.
-
-    Returns:
-        pd.Series: Issue category counts.
-    """
-    issue_type_counts = issues_df["issue_category"].value_counts()
-    return issue_type_counts
-
-
 def impact_of_pr_size_on_resolution_time(issues_df, prs_df):
     """
     Analyze the impact of pull request size on issue resolution time.
@@ -503,75 +438,42 @@ def analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df):
         None
     """
 
-    # Process repo names to standardize them
-    # For issues_df
-    def extract_owner_repo_from_issues(repo_name):
-        if repo_name.startswith("closed_issues_"):
-            repo_name = repo_name[len("closed_issues_") :]
-        elif repo_name.startswith("issues_"):
-            repo_name = repo_name[len("issues_") :]
-        elif repo_name.startswith("commits_"):
-            repo_name = repo_name[len("commits_") :]
-        owner_repo = repo_name.replace("_", "/")
-        return owner_repo
+    csv_df["repo_name"] = csv_df["Identifier"].replace("/", "_", regex=True)
 
-    issues_df["repo_name_standardized"] = issues_df["repo_name"].apply(extract_owner_repo_from_issues)
-
-    # For csv_df
-    def extract_owner_repo_from_url(url):
-        try:
-            parts = url.rstrip("/").split("/")
-            owner = parts[-2]
-            repo = parts[-1]
-            owner_repo = f"{owner}/{repo}"
-            return owner_repo
-        except IndexError:
-            return None
-
-    csv_df["repo_name_standardized"] = csv_df["URL"].apply(extract_owner_repo_from_url)
-
-    # Now merge on 'repo_name_standardized'
-    merged_df = pd.merge(
-        issues_df, csv_df[["repo_name_standardized", "microservice_category"]], on="repo_name_standardized", how="left"
-    )
-
-    # Remove issues with missing 'microservice_category' or 'resolution_time'
+    # Merge issues with CSV data on repo names
+    merged_df = pd.merge(issues_df, csv_df[["repo_name", "microservice_category"]], on="repo_name", how="left")
+    # # Drop rows with missing 'microservice_category' or 'resolution_time'
     merged_df = merged_df.dropna(subset=["microservice_category", "resolution_time"])
 
-    # Remove outliers in 'resolution_time'
     merged_df = remove_outliers(merged_df, "resolution_time", lower_percentile=0.05, upper_percentile=0.95)
-
-    # Group resolution times by microservice category
-    groups = merged_df.groupby("microservice_category")["resolution_time"].apply(list)
 
     # Perform Kruskal-Wallis H-test
     from scipy.stats import kruskal
 
-    # Prepare data for the test
-    data = [groups[cat] for cat in groups.index]
+    groups = merged_df.groupby("microservice_category")["resolution_time"].apply(list)
 
-    # Check if we have at least two groups
-    if len(data) < 2:
+    if len(groups) < 2:
         print("Not enough groups for statistical testing.")
         return
 
-    stat, p = kruskal(*data)
+    stat, p = kruskal(
+        groups["Large Microservice Architecture"],
+        groups["Small Microservice Architecture"],
+        groups["Medium Microservice Architecture"],
+    )
 
     print("Kruskal-Wallis H-test:")
-    print(f"Statistic: {stat:.4f}, p-value: {p:.4f}")
+    print(f"Statistic: {stat}, p-value: {p}")
 
     if p < 0.05:
         print(
             "There is a statistically significant difference in issue closure times between microservice size categories."
         )
 
-        # Perform Dunn's test for pairwise comparisons
         import scikit_posthocs as sp
 
-        # Create a new DataFrame for the Dunn test
         dunn_df = merged_df[["microservice_category", "resolution_time"]].copy()
 
-        # Perform Dunn's test
         dunn_results = sp.posthoc_dunn(
             dunn_df, val_col="resolution_time", group_col="microservice_category", p_adjust="bonferroni"
         )
@@ -579,18 +481,13 @@ def analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df):
         print("\nDunn's test results (p-values):")
         print(dunn_results)
 
-        # Interpret the Dunn test results
         print("\nSignificant pairwise differences (p < 0.05):")
         significant_pairs = dunn_results.where(dunn_results < 0.05)
         print(significant_pairs)
-
     else:
         print(
             "There is no statistically significant difference in issue closure times between microservice size categories."
         )
-
-    # Plot the results
-    plot_issue_resolution_time_by_microservice_size(merged_df)
 
 
 def remove_outliers(df, column, lower_percentile=0.05, upper_percentile=0.95):
@@ -755,21 +652,41 @@ def plot_approval_label_effect(comparison):
     plt.show()
 
 
-def plot_issue_resolution_time_by_microservice_size(merged_df):
+def plot_service_numbers_vs_resolution_time(issues_df, csv_df):
     """
-    Plot the distribution of issue resolution times per microservice size category.
+    Plot the relationship between the number of services and resolution time,
+    with each point colored by its microservice category.
 
     Args:
-        merged_df (pd.DataFrame): DataFrame containing issues and microservice size categories.
+        issues_df (pd.DataFrame): Enriched issue DataFrame.
+        csv_df (pd.DataFrame): Enriched CSV DataFrame containing microservice size information.
     """
-    import seaborn as sns
+    # Merge issues with CSV data on repo names to get microservice category and number of services
+    csv_df["repo_name"] = csv_df["Identifier"].replace("/", "_", regex=True)
+    merged_df = pd.merge(
+        issues_df, csv_df[["repo_name", "microservice_category", "number_of_microservices"]], on="repo_name", how="left"
+    )
 
-    plt.figure(figsize=(12, 6))
-    sns.boxplot(x="microservice_category", y="resolution_time", data=merged_df)
-    plt.xlabel("Microservice Size Category", fontsize=12)
-    plt.ylabel("Resolution Time (days)", fontsize=12)
-    plt.title("Issue Resolution Time by Microservice Size Category", fontsize=14)
-    plt.xticks(rotation=45)
+    # Drop rows with missing values in key columns
+    merged_df = merged_df.dropna(subset=["number_of_microservices", "resolution_time", "microservice_category"])
+
+    plt.figure(figsize=(12, 8))
+    sns.scatterplot(
+        x="number_of_microservices",
+        y="resolution_time",
+        hue="microservice_category",
+        data=merged_df,
+        palette="Set2",
+        s=100,
+        alpha=0.7,
+        edgecolor="w",
+    )
+
+    plt.xlabel("Number of Services")
+    plt.ylabel("Resolution Time (days)")
+    plt.title("Resolution Time vs. Number of Services by Microservice Category")
+    plt.legend(title="Microservice Category", loc="upper right")
+    plt.grid(True)
     plt.tight_layout()
     plt.show()
 
@@ -805,8 +722,8 @@ def load_csv_data(file_path):
         csv_df["languages_list"] = csv_df["languages"].apply(parse_languages)
 
     # Ensure 'number_of_microservices' is numeric
-    if "num_services" in csv_df.columns:
-        csv_df["number_of_microservices"] = pd.to_numeric(csv_df["num_services"], errors="coerce")
+    if "n_microservices" in csv_df.columns:
+        csv_df["number_of_microservices"] = pd.to_numeric(csv_df["n_microservices"], errors="coerce")
 
     return csv_df
 
@@ -1016,17 +933,15 @@ def main():
     print(f"Average Issue Resolution Time: {avg_resolution_time:.2f} days")
     plot_issue_resolution_time(issues_df)
 
-    # RQ2.2: What types of issues are most common?
-    print("Finding most common issue types...")
-    issue_type_counts = find_most_common_issue_types(issues_df)
-    plot_issue_types(issue_type_counts)
-
     # RQ2.3: Impact of PR size on issue resolution time
     print("Analyzing impact of PR size on issue resolution time...")
     impact_df = impact_of_pr_size_on_resolution_time(issues_df, prs_df)
     plot_pr_size_vs_resolution_time(impact_df)
 
     impact_df_no_outliers = remove_outliers(impact_df, "resolution_time", lower_percentile=0.05, upper_percentile=0.95)
+    impact_df_no_outliers = remove_outliers(
+        impact_df_no_outliers, "total_changes", lower_percentile=0.05, upper_percentile=0.95
+    )
 
     # Plot without outliers
     print("Plotting PR size vs. resolution time (without outliers)...")
@@ -1043,6 +958,7 @@ def main():
     # RQ2.6: Is there a statistical difference between issue closure times with repository microservice size?
     print("Analyzing issue resolution time by microservice size...")
     analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df)
+    plot_service_numbers_vs_resolution_time(issues_df, csv_df)
 
     print("Analysis complete.")
 
