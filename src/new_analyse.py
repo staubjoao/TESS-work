@@ -728,6 +728,9 @@ def load_csv_data(file_path):
     return csv_df
 
 
+import pandas as pd
+
+
 def enrich_csv_data(csv_df):
     """
     Enrich the CSV DataFrame with additional metrics and categorizations.
@@ -744,17 +747,19 @@ def enrich_csv_data(csv_df):
     else:
         csv_df["language_count"] = 0
 
-    # Categorize projects based on the number of microservices
+    # Categorize projects based on the number of microservices using quartiles
     if "number_of_microservices" in csv_df.columns:
+        # Calculate quartiles
+        q1 = csv_df["number_of_microservices"].quantile(0.25)
+        q3 = csv_df["number_of_microservices"].quantile(0.75)
+        print(f"Q1: {q1}, Q3: {q3}")
 
         def categorize_microservices(num):
             if pd.isnull(num):
                 return "Unknown"
-            elif num == 1:
-                return "Monolith"
-            elif 2 <= num <= 4:
+            elif num <= q1:
                 return "Small Microservice Architecture"
-            elif 4 <= num <= 9:
+            elif q1 < num <= q3:
                 return "Medium Microservice Architecture"
             else:
                 return "Large Microservice Architecture"
