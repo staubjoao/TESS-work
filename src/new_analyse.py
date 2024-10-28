@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 from glob import glob
 
+import scikit_posthocs as sp
 import matplotlib.pyplot as plt
 import networkx as nx
 import pandas as pd
@@ -469,8 +470,6 @@ def analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df):
         print(
             "There is a statistically significant difference in issue closure times between microservice size categories."
         )
-
-        import scikit_posthocs as sp
 
         dunn_df = merged_df[["microservice_category", "resolution_time"]].copy()
 
