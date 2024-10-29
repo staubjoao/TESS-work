@@ -445,22 +445,24 @@ def analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df):
     merged_df = pd.merge(issues_df, csv_df[["repo_name", "microservice_category"]], on="repo_name", how="left")
     # # Drop rows with missing 'microservice_category' or 'resolution_time'
     merged_df = merged_df.dropna(subset=["microservice_category", "resolution_time"])
-
-    merged_df = remove_outliers(merged_df, "resolution_time", lower_percentile=0.05, upper_percentile=0.95)
+    # sort merged_df
+    print(merged_df.head())
+    merged_df = merged_df.sort_values(by="resolution_time")
+    print(merged_df.head())
 
     # Perform Kruskal-Wallis H-test
     from scipy.stats import kruskal
 
     groups = merged_df.groupby("microservice_category")["resolution_time"].apply(list)
+    print(groups)
 
     if len(groups) < 2:
         print("Not enough groups for statistical testing.")
         return
 
     stat, p = kruskal(
-        groups["Large Microservice Architecture"],
-        groups["Small Microservice Architecture"],
-        groups["Medium Microservice Architecture"],
+        *groups,
+        nan_policy="omit",
     )
 
     print("Kruskal-Wallis H-test:")
@@ -473,9 +475,7 @@ def analyze_issue_resolution_time_by_microservice_size(issues_df, csv_df):
 
         dunn_df = merged_df[["microservice_category", "resolution_time"]].copy()
 
-        dunn_results = sp.posthoc_dunn(
-            dunn_df, val_col="resolution_time", group_col="microservice_category", p_adjust="bonferroni"
-        )
+        dunn_results = sp.posthoc_dunn(dunn_df, val_col="resolution_time", group_col="microservice_category")
 
         print("\nDunn's test results (p-values):")
         print(dunn_results)
@@ -936,7 +936,10 @@ def main():
     avg_resolution_time = calculate_average_issue_resolution_time(issues_df)
     print(f"Average Issue Resolution Time: {avg_resolution_time:.2f} days")
     plot_issue_resolution_time(issues_df)
-
+    print("Removing outliers...")
+    plot_issue_resolution_time(
+        remove_outliers(issues_df, "resolution_time", lower_percentile=0.05, upper_percentile=0.95)
+    )
     # RQ2.3: Impact of PR size on issue resolution time
     print("Analyzing impact of PR size on issue resolution time...")
     impact_df = impact_of_pr_size_on_resolution_time(issues_df, prs_df)

@@ -1,0 +1,11 @@
+2024-10-28 21:30:44,620 - INFO - Fetching Page 1: https://app.clicksign.com/api/v3/envelopes?filter%5Bstatus%5D=closed&page%5Bsize%5D=50&page%5Bnumber%5D=1
+2024-10-28 21:30:48,789 - INFO - Fetched 50 envelopes. Total so far: 50
+2024-10-28 21:30:48,790 - INFO - Fetching Page 2: https://app.clicksign.com/api/v3/envelopes?filter%5Bstatus%5D=closed&page%5Bsize%5D=50&page%5Bnumber%5D=2
+2024-10-28 21:30:49,683 - INFO - Fetched 50 envelopes. Total so far: 100
+2024-10-28 21:30:49,684 - INFO - Fetching Page 3: https://app.clicksign.com/api/v3/envelopes?filter%5Bstatus%5D=closed&page%5Bsize%5D=50&page%5Bnumber%5D=3
+2024-10-28 21:30:50,594 - INFO - Fetched 50 envelopes. Total so far: 150
+2024-10-28 21:30:50,594 - INFO - Fetching Page 4: https://app.clicksign.com/api/v3/envelopes?filter%5Bstatus%5D=closed&page%5Bsize%5D=50&page%5Bnumber%5D=4
+2024-10-28 21:30:51,556 - INFO - Fetched 50 envelopes. Total so far: 200
+2024-10-28 21:30:51,556 - INFO - Fetching Page 5: https://app.clicksign.com/api/v3/envelopes?filter%5Bstatus%5D=closed&page%5Bsize%5D=50&page%5Bnumber%5D=5
+2024-10-28 21:30:52,473 - INFO - Fetched 50 envelopes. Total so far: 250
+2024-10-28 21:30:52,473 - INFO - Fetching Page 6: https://app.clicksign.com/api/v3/envelopes?filter%5Bstatus%5D=closed&page%5Bsize%5D=50&page%5Bnumber%5D=6
