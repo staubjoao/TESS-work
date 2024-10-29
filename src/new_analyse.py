@@ -795,9 +795,6 @@ def load_csv_data(file_path):
     return csv_df
 
 
-import pandas as pd
-
-
 def enrich_csv_data(csv_df):
     """
     Enrich the CSV DataFrame with additional metrics and categorizations.
@@ -828,6 +825,42 @@ def enrich_csv_data(csv_df):
                 return "Small Microservice Architecture"
             elif q1 < num <= q3:
                 return "Medium Microservice Architecture"
+            else:
+                return "Large Microservice Architecture"
+
+        csv_df["microservice_category"] = csv_df["number_of_microservices"].apply(categorize_microservices)
+    else:
+        csv_df["microservice_category"] = "Unknown"
+
+    return csv_df
+
+def enrich_csv_data_two_groups(csv_df):
+    """
+    Enrich the CSV DataFrame with additional metrics and categorizations.
+
+    Args:
+        csv_df (pd.DataFrame): DataFrame containing CSV data.
+
+    Returns:
+        pd.DataFrame: Enriched DataFrame.
+    """
+    # Example: Count the number of languages used in each project
+    if "languages_list" in csv_df.columns:
+        csv_df["language_count"] = csv_df["languages_list"].apply(len)
+    else:
+        csv_df["language_count"] = 0
+
+    # Categorize projects based on the number of microservices using median
+    if "number_of_microservices" in csv_df.columns:
+        # Calculate median
+        median = csv_df["number_of_microservices"].median()
+        print(f"Median: {median}")
+
+        def categorize_microservices(num):
+            if pd.isnull(num):
+                return "Unknown"
+            elif num <= median:
+                return "Small Microservice Architecture"
             else:
                 return "Large Microservice Architecture"
 
