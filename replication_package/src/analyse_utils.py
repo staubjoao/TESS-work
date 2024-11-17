@@ -875,6 +875,8 @@ def analyze_language_usage(csv_df):
     """
     # Flatten the list of languages into a single list
     all_languages = csv_df["languages_list"].explode()
+    # Ignore 'dockerfile' language
+    all_languages = all_languages[all_languages != "dockerfile"]
     language_counts = all_languages.value_counts()
     return language_counts
 
