@@ -6,7 +6,6 @@ from glob import glob
 
 import scikit_posthocs as sp
 import matplotlib.pyplot as plt
-import networkx as nx
 import pandas as pd
 import seaborn as sns
 from scipy.stats import kruskal
