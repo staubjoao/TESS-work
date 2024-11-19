@@ -10,6 +10,8 @@ import pandas as pd
 import seaborn as sns
 from scipy.stats import kruskal
 import scikit_posthocs as sp
+import numpy as np
+from scipy.stats import pearsonr
 
 COMMITS_DATA_PATH = "data/commits/*.json"
 ISSUES_DATA_PATH = "data/issues/*.json"
@@ -373,7 +375,8 @@ def impact_of_pr_size_on_resolution_time(issues_df, prs_df):
 
 def plot_contributor_count_vs_resolution_time(issues_df):
     """
-    Plot the impact of the number of contributors on issue resolution time.
+    Plot the impact of the number of contributors on issue resolution time,
+    including the Pearson correlation coefficient and a regression line.
 
     Args:
         issues_df (pd.DataFrame): Enriched issue DataFrame.
@@ -393,15 +396,47 @@ def plot_contributor_count_vs_resolution_time(issues_df):
     # Merge contributor counts with average resolution times
     merged_df = pd.merge(contributor_counts, avg_resolution_times, on="repo_name")
 
-    # Plot the relationship
-    plt.figure(figsize=(10, 6))
-    plt.scatter(x=merged_df["contributor_count"], y=merged_df["avg_resolution_time"], alpha=0.7, color="purple")
+    # Calculate the Pearson correlation coefficient
+    corr_coef, p_value = pearsonr(merged_df["contributor_count"], merged_df["avg_resolution_time"])
 
-    plt.xlabel("Number of Contributors")
-    plt.ylabel("Average Resolution Time (days)")
-    plt.title("Impact of Number of Contributors on Issue Resolution Time")
-    plt.grid(True)
+    # Create the scatter plot
+    plt.figure(figsize=(10, 6))
+    plt.scatter(
+        x=merged_df["contributor_count"],
+        y=merged_df["avg_resolution_time"],
+        alpha=0.7,
+        color="purple",
+        edgecolor="w",
+        s=100,
+    )
+
+    # Calculate and plot the regression line
+    slope, intercept = np.polyfit(merged_df["contributor_count"], merged_df["avg_resolution_time"], 1)
+    regression_line = slope * merged_df["contributor_count"] + intercept
+    plt.plot(merged_df["contributor_count"], regression_line, color="red", linewidth=2, label="Regression Line")
+
+    # Annotate the correlation coefficient on the plot
+    plt.text(
+        0.05,
+        0.95,
+        f"Pearson Correlation: {corr_coef:.2f}",
+        transform=plt.gca().transAxes,
+        fontsize=12,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.5),
+    )
+
+    # Add labels and title
+    plt.xlabel("Number of Contributors", fontsize=14)
+    plt.ylabel("Average Resolution Time (days)", fontsize=14)
+    plt.title("Impact of Number of Contributors on Issue Resolution Time", fontsize=16)
+
+    # Add grid, legend, and improve layout
+    plt.grid(True, linestyle="--", alpha=0.7)
+    plt.legend()
     plt.tight_layout()
+
+    # Display the plot
     plt.show()
 
 
@@ -628,22 +663,51 @@ def plot_issue_types(issue_type_counts):
     plt.show()
 
 
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+from scipy.stats import pearsonr
+
+
 def plot_pr_size_vs_resolution_time(impact_df):
     """
-    Plot the impact of PR size on issue resolution time.
+    Plot the impact of PR size on issue resolution time,
+    including the Pearson correlation coefficient and an optional regression line.
 
     Args:
         impact_df (pd.DataFrame): DataFrame correlating PR size with resolution time.
     """
-    plt.figure(figsize=(10, 6))
+    corr_coef, p_value = pearsonr(impact_df["total_changes"], impact_df["resolution_time"])
 
+    plt.figure(figsize=(10, 6))
     plt.scatter(x=impact_df["total_changes"], y=impact_df["resolution_time"], alpha=0.7)
 
-    plt.xlabel("PR Size (Lines Changed)")
-    plt.ylabel("Resolution Time (days)")
-    plt.title("Impact of PR Size on Issue Resolution Time")
+    slope, intercept = np.polyfit(impact_df["total_changes"], impact_df["resolution_time"], 1)
+    regression_line = slope * impact_df["total_changes"] + intercept
+    plt.plot(impact_df["total_changes"], regression_line, color="red", linewidth=2, label="Regression Line")
+
+    plt.text(
+        0.05,
+        0.95,
+        f"Pearson Correlation: {corr_coef:.2f}",
+        transform=plt.gca().transAxes,
+        fontsize=12,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.5),
+    )
+
+    # Add labels and title
+    plt.xlabel("PR Size (Lines Changed)", fontsize=14)
+    plt.ylabel("Resolution Time (days)", fontsize=14)
+    plt.title("Impact of PR Size on Issue Resolution Time", fontsize=16)
+
+    # Add grid and improve layout
     plt.grid(True)
     plt.tight_layout()
+
+    plt.legend()
+
+    # Display the plot
     plt.show()
 
 
