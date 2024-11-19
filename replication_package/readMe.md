@@ -125,6 +125,10 @@ TOKEN2=your_github_token_here
 3. **Scrape Pull Requests:**  
    Open and run `src/scraping/scraping_pull_requests.ipynb` to fetch pull request data from GitHub repositories.
 
+4. **Result Scraping:** 
+   The full scraped dataset is available [here](https://figshare.com/s/66687efc93d8352f9156).
+
+
 ### Data Analysis
 
 - **Perform Analysis:**  
